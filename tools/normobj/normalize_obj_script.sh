@@ -1,0 +1,1 @@
+/home/fudan248/zhangjinyu/code_repo/objaverse/tools/glb2obj/blender-3.2.2-linux-x64/blender -b -P /home/fudan248/zhangjinyu/code_repo/objaverse/tools/normobj/normalize_obj.py
