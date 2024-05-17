@@ -108,440 +108,125 @@ def sphere_generate_samples(samples=300, distance=5):
 
     return np.stack(RTs)
 
+def clear_scene(engine, scene):
+    # Remove all actors
+    for actor in scene.get_all_actors():
+        scene.remove_actor(actor)
+
+    # Remove all articulations
+    for articulation in scene.get_all_articulations():
+        scene.remove_articulation(articulation)
+
+    # Clear all lights
+    scene.clear_lights()
+
 SAMPLE = "SEMI-SPHERE"
 if SAMPLE == "SPHERE":
     generate_samples = sphere_generate_samples
 else:
     generate_samples = semi_sphere_generate_samples
 
+def normalize_model(mesh):
+    # Get the bounding box of the mesh
+    bounding_box = mesh.get_axis_aligned_bounding_box()
+    min_bound = bounding_box.min_bound
+    max_bound = bounding_box.max_bound
+    
+    # Calculate the scale factor to normalize the model size
+    scale_factor = 1.0 / np.max(max_bound - min_bound)
+    
+    # Scale and translate the mesh to normalize its size and move it to the origin
+    mesh.scale(scale_factor, center=bounding_box.get_center())
+    mesh.translate(-mesh.get_center())
+    
+    return mesh
+
+def load_and_normalize_urdf(urdf_path):
+    # Load the mesh from the corresponding .obj file
+    obj_path = urdf_path.replace(".urdf", ".obj")
+    mesh = o3d.io.read_triangle_mesh(obj_path)
+    
+    # Normalize the mesh
+    mesh = normalize_model(mesh)
+    
+    return mesh
+
 def main():
-    objaverse_dir = "/home/add_disk_e/objaverse_lvis_trimesh_objs_normalized/"
-    objaverse_urdf_lst = [os.path.join(objaverse_dir, file) for file in os.listdir(objaverse_dir) if file.endswith(".urdf")][10:30]
+    objaverse_dir = "/home/add_disk_e/objaverse_lvis_trimesh_objs_normalized/3k_10k/"
+    objaverse_urdf_lst = [os.path.join(objaverse_dir, file) for file in os.listdir(objaverse_dir) if file.endswith(".urdf")]
 
     successful_urdf_lst = []
     failed_urdf_lst = []
     
-    
-    for urdf_path in objaverse_urdf_lst:
+    for urdf_path in objaverse_urdf_lst[:5]:
         start_time = time.time()
         try:
+            objaverse_id = urdf_path.split("/")[-1].replace(".urdf", "")
+            instance_path = os.path.join("/home/fudan248/zhangjinyu/tmp/", objaverse_id)
+            if not os.path.exists(instance_path):
+                os.makedirs(instance_path)
+                print(f"Creating instance: {objaverse_id}")
+            else:
+                print(f"Instance path already exists: {objaverse_id}")
+                continue
 
-            # urdf_path = '../assets/179/mobility.urdf'
-            # urdf_path = './dataset/101490/mobility.urdf'
-            # urdf_path = os.path.join("./dataset", str(item_id), "mobility.urdf")
-            ## Successful urdf
-            # urdf_path = "/home/fudan248/zhangjinyu/code_repo/objaverse/sample_input/sample_objs/cat/ff3536219c1a4baebc26d387eaa3dd78.urdf"
-            ## Test urdf
-            # urdf_path = "/home/fudan248/zhangjinyu/code_repo/objaverse/sample_input/test_objs/normalized/00cd033828da4531b802f9542c312670.urdf"
-            # obj_path =  "/home/fudan248/zhangjinyu/code_repo/objaverse/sample_input/test_objs/normalized/00cd033828da4531b802f9542c312670.obj"
-            
+            # Load and normalize the mesh
+            mesh = load_and_normalize_urdf(urdf_path)
+
+            # Save the normalized mesh
+            normalized_obj_path = os.path.join(instance_path, "normalized.obj")
+            o3d.io.write_triangle_mesh(normalized_obj_path, mesh)
+
             # define engine
             engine = sapien.Engine()
-            # renderer = sapien.SapienRenderer()
             renderer = sapien.SapienRenderer(offscreen_only=True)
             engine.set_renderer(renderer)
 
             scene = engine.create_scene()
-            scene.set_timestep(1 / 10.0) # 10ms
-            # TEST: add ground
-            # scene.add_ground(altitude=0)
-            
+            scene.set_timestep(1 / 10.0)
+
             # add light
-            scene.set_ambient_light([0.5, 0.5, 0.5]) # gray env light
+            scene.set_ambient_light([0.5, 0.5, 0.5])
             scene.add_directional_light([0, 1, -1], [0.5, 0.5, 0.5], shadow=True)
             scene.add_point_light([1, 2, 2], [1, 1, 1], shadow=True)
             scene.add_point_light([1, -2, 2], [1, 1, 1], shadow=True)
             scene.add_point_light([-1, 0, 1], [1, 1, 1], shadow=True)
 
-            loader = scene.create_urdf_loader()
-            # loader.fix_root_link = True
-            
-            # 从urdf_path替换得到obj_path
-            obj_path = urdf_path.replace(".urdf", ".obj")
-            
-            # load as a kinematic articulation
-            asset = loader.load_kinematic(urdf_path)
-            assert asset, 'URDF not loaded.'
-            articulation = asset.get_articulation()
-            root_link = articulation.get_root_link()
+            # loader = scene.create_urdf_loader()
+            # asset = loader.load_kinematic(urdf_path)
+            # assert asset, 'URDF not loaded.'
 
-            # dir path
-            # root_path = "./render/Dispenser"
-            objaverse_id = urdf_path.split("/")[-1].replace(".urdf", "")
-            instance_path = os.path.join("/home/add_disk_e/objaverse_lvis_trimesh_objs_normalized_output_test_fixlink/", objaverse_id)
-            if not os.path.exists(instance_path):
-                os.makedirs(instance_path)
+            # Add the normalized mesh to the scene
+            actor_builder = scene.create_actor_builder()
+            actor_builder.add_visual_from_file(normalized_obj_path)
+            actor_builder.build_kinematic()
 
+            # Generate camera poses
+            sample_function = semi_sphere_generate_samples if SAMPLE == "SEMI-SPHERE" else sphere_generate_samples
+            camera_poses = sample_function()
 
-            # init min & max
-            X_min, Y_min, Z_min = float('inf'), float('inf'), float('inf')
-            X_max, Y_max, Z_max = -float('inf'), -float('inf'), -float('inf')
+            for idx, cam_pose in enumerate(camera_poses):
+                # Set camera pose
+                camera = scene.add_camera(name=f"camera_{idx}", width=640, height=480, fovx=1.0, fovy=1.0, near=0.1, far=100.0)
+                camera.set_pose(cam_pose)
 
-            # # textured_objs_path = './dataset/101490/textured_objs'
-            # # textured_objs_path = os.path.join("./dataset", str(item_id), "textured_objs")
-            # textured_objs_path = "/home/fudan248/zhangjinyu/code_repo/objaverse/sample_objs/bucket/"
-            # # all .obj
-            # for filename in os.listdir(textured_objs_path):
-            #     if filename.endswith('.obj'):
-            
-            # load .obj
-            mesh = o3d.io.read_triangle_mesh(obj_path)
-
-            # get point cloud data
-            points = np.asarray(mesh.vertices)
-
-            # compute extreme point for each pc
-            x_min, y_min, z_min = points.min(axis=0)
-            x_max, y_max, z_max = points.max(axis=0)
-
-            # update global extreme point
-            X_min = min(X_min, x_min)
-            Y_min = min(Y_min, y_min)
-            Z_min = min(Z_min, z_min)
-            X_max = max(X_max, x_max)
-            Y_max = max(Y_max, y_max)
-            Z_max = max(Z_max, z_max)
-
-            # compute X_scale, Y_scale, Z_scale
-            X_scale = X_max - X_min
-            Y_scale = Y_max - Y_min
-            Z_scale = Z_max - Z_min
-
-            # save scale *
-            scale_path = os.path.join(instance_path, "scale.txt")
-            with open(scale_path, 'w') as file:
-                file.write(f'{X_scale} {Y_scale} {Z_scale}\n')
-
-            # scale = pcd.get_scale()
-            # scale_file = os.pat好的h.join(pose_path, "scale.txt")
-            # with open(scale_file, "w") as file:
-            #     file.write(f"Scale X: {scale[0]}\n")
-            #     file.write(f"Scale Y: {scale[1]}\n")
-            #     file.write(f"Scale Z: {scale[2]}\n")
-
-            # ---------------------------------------------------------------------------- #
-            # Camera
-            # ---------------------------------------------------------------------------- #
-            near, far = 0.1, 100 # near plane to far plane -> depth range
-            width, height = 640, 480
-
-            # generate a set of cameras (position & pose)
-            camera_poses = generate_samples(samples=300, distance=30) # 300, 5
-
-            # one camera for each pose each render (enumerate pose)
-
-            camera = scene.add_camera(
-                name="camera",
-                width=width,
-                height=height,
-                fovy=np.deg2rad(35),
-                near=near,
-                far=far,
-            )
-            camera.set_pose(sapien.Pose(p=[0, 0, 0]))
-            # mount
-            camera_mount_actor = scene.create_actor_builder().build_kinematic()
-            camera.set_parent(parent=camera_mount_actor, keep_pose=False)
-
-
-            print('Intrinsic matrix\n', camera.get_intrinsic_matrix())
-
-            # save intrinsic matrix
-            intrinsic_path = os.path.join(instance_path, "intrinsic.txt")
-            if not os.path.exists(intrinsic_path):
-                np.savetxt(intrinsic_path, camera.get_intrinsic_matrix())
-
-            # print(camera_poses[-1])
-
-            # define pose
-            for i, cam_pos in enumerate(camera_poses):
-                # if time.time() - start_time > 120:  # 检查时间是否超过120秒
-                #     print("Time limit exceeded, moving to next URDF")
-                #     break  # 跳过当前循环的剩余部分
-                # create pose path
-                # pose_path = os.path.join(instance_path, i)
-                # if not os.path.exists(pose_path):
-                #     os.makedirs(pose_path)
-
-                # set pose
-                camera_mount_actor.set_pose(sapien.Pose.from_transformation_matrix(cam_pos))
-
-                # pose
-                new_cam_pos = cam_pos
-                new_cam_pos[:3, 1:3] *=-1
-                # change
-                new_cam_pos[:3, 0], new_cam_pos[:3, 1] = new_cam_pos[:3, 1], new_cam_pos[:3, 0].copy()
-                new_cam_pos[:3, 1], new_cam_pos[:3, 2] = new_cam_pos[:3, 2], new_cam_pos[:3, 1].copy()
-
-                instance_pose = np.linalg.inv(new_cam_pos)
-                pose_path = os.path.join(instance_path, f"{str(i).zfill(4)}_pose.txt")
-                np.savetxt(pose_path, instance_pose)
-
-                # mount
-                # camera_mount_actor = scene.create_actor_builder().build_kinematic()
-                # camera.set_parent(parent=camera_mount_actor, keep_pose=False)
-
-                # forward = -cam_pos / np.linalg.norm(cam_pos)
-                # left = np.cross([0, 0, 1], forward)
-                # left = left / np.linalg.norm(left)
-                # up = np.cross(forward, left)
-                # mat44 = np.eye(4)
-                # mat44[:3, :3] = np.stack([forward, left, up], axis=1)
-                # mat44[:3, 3] = cam_pos
-                # camera_mount_actor.set_pose(sapien.Pose.from_transformation_matrix(mat44))
-
-                scene.step()  # make everything set
+                # Render images
+                scene.step()
                 scene.update_render()
-                camera.take_picture()
+                rgba = camera.get_color_rgba()
+                depth = camera.get_depth()
 
-                rgba = camera.get_float_texture('Color')  # [H, W, 4]
-                # An alias is also provided
-                # rgba = camera.get_color_rgba()  # [H, W, 4]
-                rgba_img = (rgba * 255).clip(0, 255).astype("uint8")
-                rgba_pil = Image.fromarray(rgba_img)
-                rgb_path = os.path.join(instance_path, f"{str(i).zfill(4)}_rgb.png")
-                rgba_pil.save(rgb_path)
+                # Save rendered images
+                Image.fromarray((rgba * 255).astype(np.uint8)).save(os.path.join(instance_path, f"rgb_{idx}.png"))
+                np.save(os.path.join(instance_path, f"depth_{idx}.npy"), depth)
 
-                # ---------------------------------------------------------------------------- #
-                # XYZ position in the camera space
-                # ---------------------------------------------------------------------------- #
-                # Each pixel is (x, y, z, render_depth) in camera space (OpenGL/Blender)
-                position = camera.get_float_texture('Position')  # [H, W, 4]
-                points = position[..., :3][position[..., 3] < 1]
-                points[:, 1] = - points[:, 1]
-                points[:, 2] = - points[:, 2]
-                
-                # OpenGL/Blender: y up and -z forward
-                # points_opengl = position[..., :3][position[..., 3] < 1]
-                # points_color = rgba[position[..., 3] < 1][..., :3]
-                # # Model matrix is the transformation from OpenGL camera space to SAPIEN world space
-                # # camera.get_model_matrix() must be called after scene.update_render()!
-                # model_matrix = camera.get_model_matrix()
-                # points_world = points_opengl @ model_matrix[:3, :3].T + model_matrix[:3, 3]
-
-                # SAPIEN CAMERA: z up and x forward
-                # points_camera = points_opengl[..., [2, 0, 1]] * [-1, -1, 1]
-
-                pcd = o3d.geometry.PointCloud()
-                pcd.points = o3d.utility.Vector3dVector(points)
-                # pcd.colors = o3d.utility.Vector3dVector(points_color)
-
-                # No display
-                # coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame()
-                # o3d.visualization.draw_geometries([pcd, coord_frame])
-
-                # save pc
-                # "{}_pcd.obj".format(str(id).zifill(4))
-                obj_path = os.path.join(instance_path, f"{str(i).zfill(4)}_pcd.obj")
-                # o3d.io.write_triangle_mesh(obj_path, pcd)
-                with open(obj_path, 'w') as f:
-                    for point in pcd.points:
-                        f.write(f"v {point[0]} {point[1]} {point[2]}\n")
-
-                # Depth
-                depth = -position[..., 2]
-                depth_image = (depth * 1000.0).astype(np.uint16)
-                depth_pil = Image.fromarray(depth_image)
-                depth_path = os.path.join(instance_path, f"{str(i).zfill(4)}_depth.png")
-                depth_pil.save(depth_path)
-
-                # ---------------------------------------------------------------------------- #
-                # Segmentation labels
-                # ---------------------------------------------------------------------------- #
-                # Each pixel is (visual_id, actor_id/link_id, 0, 0)
-                # visual_id is the unique id of each visual shape
-                seg_labels = camera.get_uint32_texture('Segmentation')  # [H, W, 4]
-                # colormap = sorted(set(ImageColor.colormap.values()))
-                # color_palette = np.array([ImageColor.getrgb(color) for color in colormap],
-                #                         dtype=np.uint8)
-                label0_image = seg_labels[..., 0].astype(np.uint8)  # mesh-level
-                label1_image = seg_labels[..., 1].astype(np.uint8)  # actor-level
-                # # Or you can use aliases below
-                # # label0_image = camera.get_visual_segmentation()
-                # # label1_image = camera.get_actor_segmentation()
-                # label0_pil = Image.fromarray(color_palette[label0_image])
-                # label0_path = os.path.join(instance_path, f"{str(i).zfill(4)}_label0.png")
-                # label0_pil.save(label0_path)
-
-                # label1_pil = Image.fromarray(color_palette[label1_image])
-                # label1_path = os.path.join(instance_path, f"{str(i).zfill(4)}_label1.png")
-                # label1_pil.save(label1_path)
-                # label1_pil = Image.fromarray(color_palette[label1_image])
-                # label1_path = os.path.join(instance_path, f"{str(i).zfill(4)}_label1.png")
-                # label1_pil.save(label1_path)
-                mask_image = np.where(label0_image == label0_image.max(), 0, 1).astype(np.uint8)
-                mask_image = Image.fromarray(mask_image)
-                mask_image_path = os.path.join(instance_path, f"{str(i).zfill(4)}_mask.png")
-                mask_image.save(mask_image_path)
-
-                # ---------------------------------------------------------------------------- #
-                # Take picture from the viewer
-                # ---------------------------------------------------------------------------- #
-                # viewer = Viewer(renderer)
-                # viewer.set_scene(scene)
-                # # We show how to set the viewer according to the pose of a camera
-                # # opengl camera -> sapien world
-                # model_matrix = camera.get_model_matrix()
-                # # sapien camera -> sapien world
-                # # You can also infer it from the camera pose
-                # model_matrix = model_matrix[:, [2, 0, 1, 3]] * np.array([-1, -1, 1, 1])
-                # # The rotation of the viewer camera is represented as [roll(x), pitch(-y), yaw(-z)]
-                # rpy = mat2euler(model_matrix[:3, :3]) * np.array([1, -1, -1])
-                # viewer.set_camera_xyz(*model_matrix[0:3, 3])
-                # viewer.set_camera_rpy(*rpy)
-                # viewer.window.set_camera_parameters(near=0.05, far=100, fovy=1)
-                # while not viewer.closed:
-                #     if viewer.window.key_down('p'):  # Press 'p' to take the screenshot
-                #         rgba = viewer.window.get_float_texture('Color')
-                #         rgba_img = (rgba * 255).clip(0, 255).astype("uint8")
-                #         rgba_pil = Image.fromarray(rgba_img)
-                #         rgba_pil.save('screenshot.png')
-                #     scene.step()
-                #     scene.update_render()
-                #     viewer.render()
-                
             successful_urdf_lst.append(urdf_path)
         except Exception as e:
-            print(e)
+            print(f"Failed to process {urdf_path}: {e}")
             failed_urdf_lst.append(urdf_path)
-            
-    print(f"Successful URDFs: {successful_urdf_lst}")
-    print(f"Failed URDFs: {failed_urdf_lst}")
-            
 
-# ======================== line ======================== #
-# >>>>>>>>>>>>>>>>>>>>>>>>      <<<<<<<<<<<<<<<<<<<<<<<< #
-# ======================== line ======================== #
-
-    # define cameras
-    # for i, cam_pose in enumerate(camera_poses):
-    #     camera = scene.add_camera(
-    #         name=f"camera_{i}",
-    #         width=width,
-    #         height=height,
-    #         fovy=np.deg2rad(35),
-    #         near=near,
-    #         far=far,
-    #     )
-
-    #     # pose
-    #     camera.set_pose(cam_pose)
-
-    #     # mount
-
-    # camera.set_pose(sapien.Pose(p=[1, 0, 0]))
-
-    # print('Intrinsic matrix\n', camera.get_intrinsic_matrix())
-
-    # camera_mount_actor = scene.create_actor_builder().build_kinematic()
-    # camera.set_parent(parent=camera_mount_actor, keep_pose=False)
-
-    # # Compute the camera pose by specifying forward(x), left(y) and up(z)
-    # cam_pos = np.array([-2, -2, 3])
-    # forward = -cam_pos / np.linalg.norm(cam_pos)
-    # left = np.cross([0, 0, 1], forward)
-    # left = left / np.linalg.norm(left)
-    # up = np.cross(forward, left)
-    # mat44 = np.eye(4)
-    # mat44[:3, :3] = np.stack([forward, left, up], axis=1)
-    # mat44[:3, 3] = cam_pos
-    # camera_mount_actor.set_pose(sapien.Pose.from_transformation_matrix(mat44))
-
-    # scene.step()  # make everything set
-    # scene.update_render()
-    # camera.take_picture()
-
-    # ---------------------------------------------------------------------------- #
-    # RGBA
-    # ---------------------------------------------------------------------------- #
-    # rgba = camera.get_float_texture('Color')  # [H, W, 4]
-    # # An alias is also provided
-    # # rgba = camera.get_color_rgba()  # [H, W, 4]
-    # rgba_img = (rgba * 255).clip(0, 255).astype("uint8")
-    # rgba_pil = Image.fromarray(rgba_img)
-    # rgba_pil.save('color.png')
-
-    # # ---------------------------------------------------------------------------- #
-    # # XYZ position in the camera space
-    # # ---------------------------------------------------------------------------- #
-    # # Each pixel is (x, y, z, render_depth) in camera space (OpenGL/Blender)
-    # position = camera.get_float_texture('Position')  # [H, W, 4]
-
-    # # OpenGL/Blender: y up and -z forward
-    # points_opengl = position[..., :3][position[..., 3] < 1]
-    # points_color = rgba[position[..., 3] < 1][..., :3]
-    # # Model matrix is the transformation from OpenGL camera space to SAPIEN world space
-    # # camera.get_model_matrix() must be called after scene.update_render()!
-    # model_matrix = camera.get_model_matrix()
-    # points_world = points_opengl @ model_matrix[:3, :3].T + model_matrix[:3, 3]
-
-    # # SAPIEN CAMERA: z up and x forward
-    # # points_camera = points_opengl[..., [2, 0, 1]] * [-1, -1, 1]
-
-    # pcd = o3d.geometry.PointCloud()
-    # pcd.points = o3d.utility.Vector3dVector(points_world)
-    # pcd.colors = o3d.utility.Vector3dVector(points_color)
-    # coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame()
-
-    # # No display
-    # # o3d.visualization.draw_geometries([pcd, coord_frame])
-
-    # # save pc
-    # o3d.io.write_point_cloud("partial_pc.obj", pcd)
-
-    # # Depth
-    # depth = -position[..., 2]
-    # depth_image = (depth * 1000.0).astype(np.uint16)
-    # depth_pil = Image.fromarray(depth_image)
-    # depth_pil.save('depth.png')
-
-    # # o3d bounding box - scale
-
-    # # ---------------------------------------------------------------------------- #
-    # # Segmentation labels
-    # # ---------------------------------------------------------------------------- #
-    # # Each pixel is (visual_id, actor_id/link_id, 0, 0)
-    # # visual_id is the unique id of each visual shape
-    # seg_labels = camera.get_uint32_texture('Segmentation')  # [H, W, 4]
-    # colormap = sorted(set(ImageColor.colormap.values()))
-    # color_palette = np.array([ImageColor.getrgb(color) for color in colormap],
-    #                          dtype=np.uint8)
-    # label0_image = seg_labels[..., 0].astype(np.uint8)  # mesh-level
-    # label1_image = seg_labels[..., 1].astype(np.uint8)  # actor-level
-    # # Or you can use aliases below
-    # # label0_image = camera.get_visual_segmentation()
-    # # label1_image = camera.get_actor_segmentation()
-    # label0_pil = Image.fromarray(color_palette[label0_image])
-    # label0_pil.save('label0.png')
-    # label1_pil = Image.fromarray(color_palette[label1_image])
-    # label1_pil.save('label1.png')
-
-    # # ---------------------------------------------------------------------------- #
-    # # Take picture from the viewer
-    # # ---------------------------------------------------------------------------- #
-    # viewer = Viewer(renderer)
-    # viewer.set_scene(scene)
-    # # We show how to set the viewer according to the pose of a camera
-    # # opengl camera -> sapien world
-    # model_matrix = camera.get_model_matrix()
-    # # sapien camera -> sapien world
-    # # You can also infer it from the camera pose
-    # model_matrix = model_matrix[:, [2, 0, 1, 3]] * np.array([-1, -1, 1, 1])
-    # # The rotation of the viewer camera is represented as [roll(x), pitch(-y), yaw(-z)]
-    # rpy = mat2euler(model_matrix[:3, :3]) * np.array([1, -1, -1])
-    # viewer.set_camera_xyz(*model_matrix[0:3, 3])
-    # viewer.set_camera_rpy(*rpy)
-    # viewer.window.set_camera_parameters(near=0.05, far=100, fovy=1)
-    # while not viewer.closed:
-    #     if viewer.window.key_down('p'):  # Press 'p' to take the screenshot
-    #         rgba = viewer.window.get_float_texture('Color')
-    #         rgba_img = (rgba * 255).clip(0, 255).astype("uint8")
-    #         rgba_pil = Image.fromarray(rgba_img)
-    #         rgba_pil.save('screenshot.png')
-    #     scene.step()
-    #     scene.update_render()
-    #     viewer.render()
-
+    print("Successful URDFs:", successful_urdf_lst)
+    print("Failed URDFs:", failed_urdf_lst)
 
 if __name__ == '__main__':
     import time
