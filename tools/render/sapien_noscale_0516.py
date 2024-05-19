@@ -247,7 +247,9 @@ def main():
 
                 # define pose
                 for i, cam_pos in enumerate(camera_poses):
-
+                    
+                    if time.time() - start_time > 1000:
+                        raise TimeoutError("Time out")
                     # set pose
                     camera_mount_actor.set_pose(sapien.Pose.from_transformation_matrix(cam_pos))
 
@@ -347,7 +349,6 @@ def main():
                     mask_image_path = os.path.join(instance_path, f"{str(i).zfill(4)}_mask.png")
                     mask_image.save(mask_image_path)
 
-                    
                 successful_urdf_lst.append(urdf_path)
             except Exception as e:
                 print(e)
